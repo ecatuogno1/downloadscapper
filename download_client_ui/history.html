@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DownloadScapper History</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <p class="eyebrow">History / Stored Sessions</p>
+        <nav class="shell-nav" aria-label="Primary">
+          <a class="shell-nav-link" href="/">Wizard</a>
+          <a class="shell-nav-link" href="/advanced">Advanced</a>
+          <a class="shell-nav-link" href="/history" aria-current="page">History</a>
+          <a class="shell-nav-link" href="/database">Database</a>
+        </nav>
+        <div class="hero-grid">
+          <div>
+            <div class="hero-topline">
+              <h1>Look back through crawls, imports, and download runs.</h1>
+              <a class="inline-link" href="/">Open Wizard</a>
+            </div>
+            <p class="lede">
+              This page pulls persisted local state so you can review recent discovery sessions and download jobs
+              without stepping through the wizard again.
+            </p>
+          </div>
+          <div class="hero-card">
+            <div class="hero-line">
+              <span>Download jobs</span>
+              <span id="download-history-count">Loading…</span>
+            </div>
+            <div class="hero-line">
+              <span>Discovery runs</span>
+              <span id="discovery-history-count">Loading…</span>
+            </div>
+            <div class="hero-line">
+              <span>State folder</span>
+              <span id="state-dir-badge">Loading…</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main class="workspace history-workspace">
+        <section class="panel panel-wide">
+          <div class="panel-head">
+            <h2>Local State</h2>
+            <p>The server keeps session JSON under the local state folder and reloads it on startup.</p>
+          </div>
+          <div id="history-overview" class="stat-strip empty">
+            <span>Loading local state…</span>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Download Jobs</h2>
+            <p>Completed, failed, cancelled, and in-progress download runs.</p>
+          </div>
+          <div id="download-history-list" class="stack">
+            <div class="muted">Loading download jobs…</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Discovery Runs</h2>
+            <p>Saved crawls and imported scrape CSV sessions.</p>
+          </div>
+          <div id="discovery-history-list" class="stack">
+            <div class="muted">Loading discovery runs…</div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/assets/history.js" defer></script>
+  </body>
+</html>

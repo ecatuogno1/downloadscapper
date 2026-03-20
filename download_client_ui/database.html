@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DownloadScapper Database</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <p class="eyebrow">Database / Indexed Downloads</p>
+        <nav class="shell-nav" aria-label="Primary">
+          <a class="shell-nav-link" href="/">Wizard</a>
+          <a class="shell-nav-link" href="/advanced">Advanced</a>
+          <a class="shell-nav-link" href="/history">History</a>
+          <a class="shell-nav-link" href="/database" aria-current="page">Database</a>
+        </nav>
+        <div class="hero-grid">
+          <div>
+            <div class="hero-topline">
+              <h1>Search the saved download index before you scrape again.</h1>
+              <a class="inline-link" href="/">Back to Wizard</a>
+            </div>
+            <p class="lede">
+              The database screen reads the local SQLite index built from repo CSVs and archived scrape runs so you can
+              search filenames, systems, pages, and final links in one place.
+            </p>
+          </div>
+          <div class="hero-card">
+            <div class="hero-line">
+              <span>Database file</span>
+              <span id="database-path-badge">Loading…</span>
+            </div>
+            <div class="hero-line">
+              <span>Unique downloads</span>
+              <span id="database-total-badge">Loading…</span>
+            </div>
+            <div class="hero-line">
+              <span>Indexed size</span>
+              <span id="database-size-badge">Loading…</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main class="workspace database-workspace">
+        <section class="panel panel-wide">
+          <div class="panel-head">
+            <h2>Database Snapshot</h2>
+            <p>Live stats from the current local SQLite index.</p>
+          </div>
+          <div id="database-stats" class="stat-strip empty">
+            <span>Loading database stats…</span>
+          </div>
+          <div id="database-top-domains" class="stack path-note"></div>
+        </section>
+
+        <section class="panel panel-wide">
+          <div class="panel-head">
+            <h2>Search</h2>
+            <p>Search by filename, system, source page, or final URL.</p>
+          </div>
+          <form id="database-search-form" class="config-grid">
+            <label class="wide">
+              <span>Query</span>
+              <input id="database-query" type="text" placeholder="playstation, mario, vimm.net/vault/..." spellcheck="false" />
+            </label>
+            <label>
+              <span>Results</span>
+              <select id="database-limit">
+                <option value="10">10</option>
+                <option value="25" selected>25</option>
+                <option value="50">50</option>
+              </select>
+            </label>
+            <div class="actions">
+              <button type="submit">Search Database</button>
+            </div>
+          </form>
+          <div id="database-search-status" class="muted">Enter a query to search the index.</div>
+        </section>
+
+        <section class="panel panel-wide">
+          <div class="panel-head">
+            <h2>Results</h2>
+            <p>Matches are grouped by the unique indexed download row, not by raw CSV observation count.</p>
+          </div>
+          <div id="database-results" class="stack">
+            <div class="muted">No search yet.</div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/assets/database.js" defer></script>
+  </body>
+</html>

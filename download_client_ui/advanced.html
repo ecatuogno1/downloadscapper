@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DownloadScapper Advanced CSV Import</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <p class="eyebrow">Advanced / CSV Import</p>
+        <nav class="shell-nav" aria-label="Primary">
+          <a class="shell-nav-link" href="/">Wizard</a>
+          <a class="shell-nav-link" href="/advanced" aria-current="page">Advanced</a>
+          <a class="shell-nav-link" href="/history">History</a>
+          <a class="shell-nav-link" href="/database">Database</a>
+        </nav>
+        <div class="hero-grid">
+          <div>
+            <div class="hero-topline">
+              <h1>Load a CSV. Turn link rows into local files.</h1>
+              <a class="inline-link" href="/database">Search Database</a>
+            </div>
+            <p class="lede">
+              Import a spreadsheet, map the columns you care about, and run concurrent downloads from a local control
+              panel.
+            </p>
+          </div>
+          <div class="hero-card">
+            <div class="hero-line">
+              <span>CSV import</span>
+              <span>GET + POST aware</span>
+            </div>
+            <div class="hero-line">
+              <span>Collision controls</span>
+              <span>Live job tracking</span>
+            </div>
+            <div class="hero-line">
+              <span>Local output folders</span>
+              <span>Failure log</span>
+            </div>
+            <div class="hero-line">
+              <span>Cross-link</span>
+              <span>Wizard / History / Database</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>1. Import</h2>
+            <p>Pick the CSV file to inspect. The file stays local until you start a job.</p>
+          </div>
+          <div class="import-box">
+            <label class="file-picker" for="csv-file">
+              <span class="file-picker-title">Choose CSV File</span>
+              <span class="file-picker-copy">Upload a sheet with download URLs and optional filename, method, or folder columns.</span>
+            </label>
+            <input id="csv-file" type="file" accept=".csv,text/csv" />
+            <div id="import-status" class="muted">No file selected.</div>
+            <div id="preview-warnings" class="stack"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>2. Map + Configure</h2>
+            <p>Adjust the column mapping and download options before starting the job.</p>
+          </div>
+          <form id="job-form" class="config-grid">
+            <label>
+              <span>URL column</span>
+              <select id="mapping-url"></select>
+            </label>
+            <label>
+              <span>Filename column</span>
+              <select id="mapping-filename"></select>
+            </label>
+            <label>
+              <span>Method column</span>
+              <select id="mapping-method"></select>
+            </label>
+            <label>
+              <span>Request data column</span>
+              <select id="mapping-request-data"></select>
+            </label>
+            <label>
+              <span>Folder column</span>
+              <select id="mapping-subdir"></select>
+            </label>
+            <label>
+              <span>Referer column</span>
+              <select id="mapping-referer"></select>
+            </label>
+            <label class="wide">
+              <span>Destination folder</span>
+              <input id="output-dir" type="text" spellcheck="false" />
+            </label>
+            <label>
+              <span>Concurrency</span>
+              <input id="concurrency" type="number" min="1" max="16" value="1" />
+            </label>
+            <label>
+              <span>File collisions</span>
+              <select id="collision-strategy">
+                <option value="unique">Keep both files</option>
+                <option value="skip">Skip existing file</option>
+                <option value="overwrite">Overwrite existing file</option>
+              </select>
+            </label>
+            <label class="toggle">
+              <input id="use-subdirectories" type="checkbox" checked />
+              <span>Use folder column to create subdirectories</span>
+            </label>
+            <div class="actions">
+              <button id="start-job" type="submit" disabled>Start Download Job</button>
+              <button id="cancel-job" type="button" class="ghost" disabled>Cancel Job</button>
+            </div>
+          </form>
+          <div id="job-form-error" class="error-banner hidden"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>3. Preview</h2>
+            <p>Verify the detected headers before you start the downloads.</p>
+          </div>
+          <div id="preview-meta" class="stat-strip empty">
+            <span>Upload a CSV to inspect its columns.</span>
+          </div>
+          <div class="table-wrap">
+            <table id="preview-table">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel panel-wide">
+          <div class="panel-head">
+            <h2>4. Activity</h2>
+            <p>Follow the active job, review recent rows, and inspect the log.</p>
+          </div>
+          <div id="job-summary" class="job-summary empty">
+            <p>No job running yet.</p>
+          </div>
+          <div class="progress-shell">
+            <div id="job-progress-bar" class="progress-bar"></div>
+          </div>
+          <div class="actions actions-job">
+            <button id="retry-failed-job" type="button" class="ghost" disabled>Retry Failed Rows</button>
+          </div>
+          <div class="panel-split">
+            <div>
+              <h3>Recent Rows</h3>
+              <div class="table-wrap compact">
+                <table id="job-table">
+                  <thead>
+                    <tr>
+                      <th>Row</th>
+                      <th>Status</th>
+                      <th>Message</th>
+                      <th>File</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <h3>Job Log</h3>
+              <pre id="job-log" class="log-box">Waiting for a job.</pre>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/assets/advanced.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DownloadScapper</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell wizard-shell">
+      <header class="hero hero-wizard">
+        <p class="eyebrow">Crawler / Download Control Room</p>
+        <nav class="shell-nav" aria-label="Primary">
+          <a class="shell-nav-link" href="/" aria-current="page">Wizard</a>
+          <a class="shell-nav-link" href="/advanced">Advanced</a>
+          <a class="shell-nav-link" href="/history">History</a>
+          <a class="shell-nav-link" href="/database">Database</a>
+        </nav>
+        <div class="hero-grid">
+          <div>
+            <div class="hero-topline">
+              <h1>Point at a site. Map the files. Pull only what you want.</h1>
+              <a class="inline-link" href="/history">Review Stored Sessions</a>
+            </div>
+            <p class="lede">
+              This wizard handles the scrape flow end to end: start URL, crawl depth, file selection, destination,
+              live progress, and final review.
+            </p>
+          </div>
+          <div class="hero-card">
+            <div class="hero-line">
+              <span>Step 1</span>
+              <span>Discover</span>
+            </div>
+            <div class="hero-line">
+              <span>Step 2</span>
+              <span>Select</span>
+            </div>
+            <div class="hero-line">
+              <span>Step 3-5</span>
+              <span>Download + Review</span>
+            </div>
+            <div class="hero-line">
+              <span>Jump Out</span>
+              <span>History + Database</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main class="wizard-layout">
+        <aside class="panel stepper-panel">
+          <div class="panel-head">
+            <h2>Workflow</h2>
+            <p>Move left to right. The active step opens automatically.</p>
+          </div>
+          <ol class="stepper" id="stepper">
+            <li class="stepper-item is-active" data-step="1">
+              <span class="step-index">1</span>
+              <div>
+                <strong>Start</strong>
+                <span>Enter URL and choose the crawl style.</span>
+              </div>
+            </li>
+            <li class="stepper-item" data-step="2">
+              <span class="step-index">2</span>
+              <div>
+                <strong>Choose Downloads</strong>
+                <span>Review discovered files and trim the list.</span>
+              </div>
+            </li>
+            <li class="stepper-item" data-step="3">
+              <span class="step-index">3</span>
+              <div>
+                <strong>Download Settings</strong>
+                <span>Set the output folder for this browser session.</span>
+              </div>
+            </li>
+            <li class="stepper-item" data-step="4">
+              <span class="step-index">4</span>
+              <div>
+                <strong>Downloading</strong>
+                <span>Track progress, bytes, and recent file activity.</span>
+              </div>
+            </li>
+            <li class="stepper-item" data-step="5">
+              <span class="step-index">5</span>
+              <div>
+                <strong>Review</strong>
+                <span>See totals, failures, and the manifest path.</span>
+              </div>
+            </li>
+          </ol>
+        </aside>
+
+        <section class="wizard-main">
+          <section class="panel wizard-step" data-step-panel="1">
+            <div class="panel-head">
+              <h2>1. Start</h2>
+              <p>Start from a live URL or load a previously saved scrape CSV.</p>
+            </div>
+            <form id="discovery-form" class="config-grid">
+              <div class="wide source-toggle" role="tablist" aria-label="Discovery source">
+                <button id="source-url" type="button" class="source-button is-selected">Use URL</button>
+                <button id="source-csv" type="button" class="source-button ghost">Upload Scrape CSV</button>
+                <button id="source-media" type="button" class="source-button ghost">Media URL</button>
+              </div>
+              <div id="url-source-fields" class="wide source-panel">
+                <div class="config-grid">
+                  <label class="wide">
+                    <span>Start URL</span>
+                    <input id="start-url" type="text" placeholder="https://example.com/downloads" spellcheck="false" />
+                  </label>
+                  <label>
+                    <span>Scan mode</span>
+                    <select id="scan-mode">
+                      <option value="single_page">Single page</option>
+                      <option value="deep_dive" selected>Deep dive</option>
+                    </select>
+                  </label>
+                  <label id="depth-wrap">
+                    <span>Depth limit</span>
+                    <input id="depth-limit" type="number" min="1" max="5" value="2" />
+                  </label>
+                </div>
+              </div>
+              <div id="csv-source-fields" class="wide source-panel hidden">
+                <div class="import-box">
+                  <label class="file-picker" for="scrape-csv-file">
+                    <span class="file-picker-title">Choose Scrape CSV</span>
+                    <span class="file-picker-copy">Load a previously saved discovery CSV and continue from the selection step.</span>
+                  </label>
+                  <input id="scrape-csv-file" type="file" accept=".csv,text/csv" />
+                  <div id="scrape-csv-status" class="muted">No scrape CSV selected.</div>
+                </div>
+              </div>
+              <div id="media-source-fields" class="wide source-panel hidden">
+                <div class="config-grid">
+                  <label class="wide">
+                    <span>Media URL</span>
+                    <input id="media-url" type="text" placeholder="https://www.youtube.com/watch?v=..." spellcheck="false" />
+                  </label>
+                  <label>
+                    <span>Download type</span>
+                    <select id="media-type">
+                      <option value="video" selected>Video</option>
+                      <option value="audio">Audio</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Format</span>
+                    <select id="media-format">
+                      <option value="any" selected>Best available</option>
+                      <option value="mp4">MP4</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Quality</span>
+                    <select id="media-quality">
+                      <option value="best" selected>Best</option>
+                      <option value="1080">1080p or less</option>
+                      <option value="720">720p or less</option>
+                      <option value="480">480p or less</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Playlist limit</span>
+                    <input id="media-playlist-limit" type="number" min="0" value="0" />
+                  </label>
+                  <label>
+                    <span>Subfolder</span>
+                    <input id="media-subdir" type="text" placeholder="optional-subfolder" spellcheck="false" />
+                  </label>
+                </div>
+                <div class="warning-banner">Powered by `yt-dlp` for direct video/audio pulls, including playlists.</div>
+              </div>
+              <div class="wide wizard-meta-strip">
+                <div class="summary-chip"><span>Profile</span><strong id="profile-badge">Generic</strong></div>
+                <div class="summary-chip"><span>Scope</span><strong>Same host only</strong></div>
+                <div class="summary-chip"><span>robots.txt</span><strong>Respected</strong></div>
+                <div class="summary-chip"><span>Scrape Archive</span><strong id="scrape-save-dir">Loading…</strong></div>
+              </div>
+              <div class="actions">
+                <button id="start-discovery" type="submit">Run Discovery</button>
+              </div>
+            </form>
+            <div id="global-error" class="error-banner hidden"></div>
+            <div id="discovery-status" class="stack wizard-status"></div>
+          </section>
+
+          <section class="panel wizard-step hidden" data-step-panel="2">
+            <div class="panel-head">
+              <h2>2. Choose Downloads</h2>
+              <p>Filter the results, select whole sections, or uncheck individual files before downloading.</p>
+            </div>
+            <div id="discovery-summary" class="job-summary empty">
+              <p>No discovery results yet.</p>
+            </div>
+            <div class="selection-toolbar">
+              <label class="selection-search">
+                <span>Search</span>
+                <input id="selection-search" type="text" placeholder="Search filename, URL, or reason" spellcheck="false" />
+              </label>
+              <label class="toggle inline-toggle">
+                <input id="filter-known-size" type="checkbox" />
+                <span>Known size only</span>
+              </label>
+              <div class="actions compact-actions">
+                <button id="select-all-visible" type="button">Select All Visible</button>
+                <button id="clear-all-visible" type="button" class="ghost">Clear Visible</button>
+              </div>
+            </div>
+            <div id="selection-summary" class="stat-strip empty">
+              <span>Nothing selected yet.</span>
+            </div>
+            <div id="selection-groups" class="selection-groups"></div>
+            <div class="actions">
+              <button id="to-settings" type="button" disabled>Continue to Download Settings</button>
+            </div>
+          </section>
+
+          <section class="panel wizard-step hidden" data-step-panel="3">
+            <div class="panel-head">
+              <h2>3. Download Settings</h2>
+              <p>Confirm where this run should land. Changes here only apply to the current browser session.</p>
+            </div>
+            <form id="download-settings-form" class="config-grid">
+              <label class="wide">
+                <span>Destination folder</span>
+                <input id="wizard-output-dir" type="text" spellcheck="false" />
+              </label>
+              <details class="wide advanced-details">
+                <summary>Advanced settings</summary>
+                <div class="config-grid advanced-grid">
+                  <label>
+                    <span>Concurrency</span>
+                    <input id="wizard-concurrency" type="number" min="1" max="16" value="1" />
+                  </label>
+                  <label>
+                    <span>File collisions</span>
+                    <select id="wizard-collision-strategy">
+                      <option value="unique">Keep both files</option>
+                      <option value="skip">Skip existing file</option>
+                      <option value="overwrite">Overwrite existing file</option>
+                    </select>
+                  </label>
+                </div>
+              </details>
+              <div class="stat-strip">
+                <span id="settings-selection-count">0 selected</span>
+              </div>
+              <div class="actions">
+                <button id="start-downloads" type="submit">Start Downloads</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel wizard-step hidden" data-step-panel="4">
+            <div class="panel-head">
+              <h2>4. Downloading</h2>
+              <p>Live status for the active download job.</p>
+            </div>
+            <div id="job-summary" class="job-summary empty">
+              <p>No job running yet.</p>
+            </div>
+            <div class="progress-shell">
+              <div id="job-progress-bar" class="progress-bar"></div>
+            </div>
+            <div class="actions actions-job">
+              <button id="cancel-job" type="button" class="ghost" disabled>Cancel Job</button>
+              <button id="retry-failed-job" type="button" class="ghost" disabled>Retry Failed Rows</button>
+            </div>
+            <div class="panel-split">
+              <div>
+                <h3>Recent Rows</h3>
+                <div class="table-wrap compact">
+                  <table id="job-table">
+                    <thead>
+                      <tr>
+                        <th>Row</th>
+                        <th>Status</th>
+                        <th>Message</th>
+                        <th>File</th>
+                      </tr>
+                    </thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+              <div>
+                <h3>Job Log</h3>
+                <pre id="job-log" class="log-box">Waiting for a job.</pre>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel wizard-step hidden" data-step-panel="5">
+            <div class="panel-head">
+              <h2>5. Review</h2>
+              <p>Final totals, failures, and where the files ended up.</p>
+            </div>
+            <div id="review-summary" class="job-summary empty">
+              <p>No completed session yet.</p>
+            </div>
+            <div id="review-manifest" class="stat-strip empty">
+              <span>Manifest path will appear here after the run.</span>
+            </div>
+            <div class="actions">
+              <button id="review-retry-failed" type="button" class="ghost" disabled>Retry Failed Rows</button>
+            </div>
+            <div id="review-failures" class="stack"></div>
+            <div class="history-section">
+              <div class="panel-head">
+                <h3>Recent Sessions</h3>
+                <p>Persisted job history loaded from local state.</p>
+              </div>
+              <div id="history-list" class="stack">
+                <div class="muted">No prior sessions loaded yet.</div>
+              </div>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>
