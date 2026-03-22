@@ -1762,6 +1762,81 @@ def search_database(db_path: Path, query: str, limit: int) -> dict[str, Any]:
         conn.close()
 
 
+def browse_database(db_path: Path, system: str, base_type: str, sort: str, limit: int, offset: int) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "available": db_path.exists(),
+        "db_path": str(db_path),
+        "systems": [],
+        "results": [],
+        "total": 0,
+        "filters": {"system": system, "type": base_type, "sort": sort, "limit": limit, "offset": offset},
+    }
+    if not db_path.exists():
+        return payload
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        # Always build systems summary
+        rows = conn.execute(
+            "SELECT system_name, base_type, COUNT(*) AS count, SUM(size_bytes) AS total_bytes "
+            "FROM downloads WHERE system_name != '' GROUP BY system_name, base_type ORDER BY system_name ASC, count DESC"
+        ).fetchall()
+        systems_map: dict[str, dict] = {}
+        for row in rows:
+            sn = row["system_name"]
+            if sn not in systems_map:
+                systems_map[sn] = {"system_name": sn, "count": 0, "total_bytes": 0, "base_types": []}
+            entry = systems_map[sn]
+            entry["count"] += row["count"]
+            entry["total_bytes"] += row["total_bytes"]
+            bt_name = row["base_type"] or "other"
+            entry["base_types"].append({"base_type": bt_name, "count": row["count"], "total_bytes": row["total_bytes"], "total_human": human_size(row["total_bytes"])})
+        for entry in systems_map.values():
+            entry["total_human"] = human_size(entry["total_bytes"])
+        payload["systems"] = sorted(systems_map.values(), key=lambda s: s["count"], reverse=True)
+
+        # If a system filter is set, fetch paginated results
+        if system:
+            sort_map = {
+                "size_desc": "d.size_bytes DESC, d.filename ASC",
+                "size_asc": "d.size_bytes ASC, d.filename ASC",
+                "name_asc": "CASE WHEN d.filename = '' THEN 1 ELSE 0 END, d.filename ASC",
+                "name_desc": "CASE WHEN d.filename = '' THEN 1 ELSE 0 END, d.filename DESC",
+            }
+            order = sort_map.get(sort, sort_map["size_desc"])
+            where = "d.system_name = ?"
+            params: list[Any] = [system]
+            if base_type:
+                where += " AND d.base_type = ?"
+                params.append(base_type)
+
+            total_row = conn.execute(f"SELECT COUNT(*) AS c FROM downloads d WHERE {where}", params).fetchone()
+            payload["total"] = total_row["c"] if total_row else 0
+
+            result_rows = conn.execute(
+                f"SELECT d.id, d.system_name, d.base_type, d.filename, d.site_domain, "
+                f"d.size_bytes, d.size_human, d.method, d.final_url, d.source_page, "
+                f"COUNT(o.id) AS observations "
+                f"FROM downloads d LEFT JOIN observations o ON o.download_id = d.id "
+                f"WHERE {where} GROUP BY d.id ORDER BY {order} LIMIT ? OFFSET ?",
+                params + [limit, offset],
+            ).fetchall()
+            payload["results"] = [
+                {
+                    "id": r["id"], "system_name": r["system_name"], "base_type": r["base_type"],
+                    "filename": r["filename"], "site_domain": r["site_domain"],
+                    "size_bytes": r["size_bytes"], "size_human": r["size_human"],
+                    "method": r["method"], "final_url": r["final_url"],
+                    "source_page": r["source_page"], "observations": int(r["observations"] or 0),
+                }
+                for r in result_rows
+            ]
+        return payload
+    finally:
+        conn.close()
+
+
 def content_disposition_filename(headers) -> str | None:
     disposition = headers.get("Content-Disposition", "")
     if not disposition:
@@ -2389,6 +2464,24 @@ class DownloadClientHandler(BaseHTTPRequestHandler):
             return
         if route == "/api/database/stats":
             self.send_json(load_database_stats(DEFAULT_DATABASE_PATH))
+            return
+        if route == "/api/database/browse":
+            system = query_params.get("system", [""])[0]
+            btype = query_params.get("type", [""])[0]
+            sort = query_params.get("sort", ["size_desc"])[0]
+            if sort not in ("size_desc", "size_asc", "name_asc", "name_desc"):
+                sort = "size_desc"
+            raw_limit = query_params.get("limit", ["50"])[0]
+            try:
+                blimit = max(1, min(200, int(raw_limit)))
+            except ValueError:
+                blimit = 50
+            raw_offset = query_params.get("offset", ["0"])[0]
+            try:
+                boffset = max(0, int(raw_offset))
+            except ValueError:
+                boffset = 0
+            self.send_json(browse_database(DEFAULT_DATABASE_PATH, system, btype, sort, blimit, boffset))
             return
         if route == "/api/database/search":
             raw_limit = query_params.get("limit", ["20"])[0]

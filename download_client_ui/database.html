@@ -66,37 +66,33 @@
 
         <section class="panel panel-wide">
           <div class="panel-head">
-            <h2>Search</h2>
-            <p>Search by filename, system, source page, or final URL.</p>
+            <h2>Browse</h2>
+            <p>Explore downloads by system and type, or search across the index.</p>
           </div>
-          <form id="database-search-form" class="config-grid">
-            <label class="wide">
-              <span>Query</span>
-              <input id="database-query" type="text" placeholder="playstation, mario, vimm.net/vault/..." spellcheck="false" />
-            </label>
-            <label>
-              <span>Results</span>
-              <select id="database-limit">
-                <option value="10">10</option>
-                <option value="25" selected>25</option>
-                <option value="50">50</option>
+
+          <div id="browse-filter-bar" class="browse-filter-bar hidden"></div>
+
+          <div class="browse-toolbar">
+            <form id="browse-search-form" class="browse-search-row">
+              <input id="browse-query" type="text" placeholder="Search filenames, systems, URLs…" spellcheck="false" />
+              <button id="browse-search-btn" type="submit">Search</button>
+            </form>
+            <label id="browse-sort-label" class="browse-sort hidden">
+              <span>Sort</span>
+              <select id="browse-sort">
+                <option value="size_desc">Largest first</option>
+                <option value="size_asc">Smallest first</option>
+                <option value="name_asc">Name A–Z</option>
+                <option value="name_desc">Name Z–A</option>
               </select>
             </label>
-            <div class="actions">
-              <button id="search-btn" type="submit">Search Database</button>
-            </div>
-          </form>
-          <div id="database-search-status" class="muted">Enter a query to search the index.</div>
-        </section>
+          </div>
 
-        <section class="panel panel-wide">
-          <div class="panel-head">
-            <h2>Results</h2>
-            <p>Matches are grouped by the unique indexed download row, not by raw CSV observation count.</p>
-          </div>
-          <div id="database-results" class="stack">
-            <div class="empty-state"><svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="26" cy="26" r="16"/><path d="M38 38l10 10"/><path d="M20 24h12M20 30h8"/></svg><p>Enter a query to search the index.</p></div>
-          </div>
+          <div id="browse-categories" class="browse-categories"></div>
+          <div id="browse-subcategories" class="browse-subcategories hidden"></div>
+          <div id="browse-results" class="stack hidden"></div>
+          <div id="browse-pagination" class="browse-pagination hidden"></div>
+          <div id="browse-status" class="muted"></div>
         </section>
       </main>
     </div>

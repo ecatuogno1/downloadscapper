@@ -1141,6 +1141,104 @@ button:focus,
   }
 }
 
+/* ─── database browse ─── */
+
+.browse-categories {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.browse-system-card {
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  width: 100%;
+  transition: border-color 160ms ease, transform 160ms ease;
+}
+.browse-system-card:hover {
+  border-color: rgba(var(--accent-rgb), 0.42);
+  transform: translateY(-2px);
+}
+
+.browse-filter-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.browse-filter-bar button {
+  font-size: 0.88rem;
+}
+.browse-separator {
+  color: var(--ink-soft);
+  font-size: 1.1rem;
+  user-select: none;
+}
+
+.browse-subcategories {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.browse-type-chip {
+  cursor: pointer;
+  transition: background 160ms ease, outline-color 160ms ease;
+}
+.browse-type-chip.is-active {
+  background: var(--accent-soft);
+  outline: 2px solid rgba(var(--accent-rgb), 0.35);
+}
+
+.browse-toolbar {
+  display: flex;
+  gap: 14px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+.browse-search-row {
+  display: flex;
+  gap: 10px;
+  flex: 1;
+}
+.browse-search-row input {
+  flex: 1;
+}
+.browse-sort {
+  display: grid;
+  gap: 6px;
+  font-size: 0.92rem;
+  min-width: 160px;
+}
+.browse-sort > span {
+  font-weight: 600;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+
+.browse-pagination {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.browse-page-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.browse-count {
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+}
+
 /* ─── responsive: medium ─── */
 
 @media (max-width: 980px) {
@@ -1191,6 +1289,13 @@ button:focus,
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
     padding-bottom: 4px;
+  }
+
+  .browse-toolbar {
+    flex-direction: column;
+  }
+  .browse-categories {
+    grid-template-columns: 1fr;
   }
 
   .shell-nav::-webkit-scrollbar {
