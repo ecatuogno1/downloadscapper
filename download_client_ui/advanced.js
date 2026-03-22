@@ -4,7 +4,7 @@ const state = {
   preview: null,
   jobId: null,
   currentJob: null,
-  pollTimer: null,
+  poller: null,
   appInfo: null,
 };
 
@@ -44,21 +44,6 @@ const mappingFields = [
   ["subdir", els.mappingSubdir],
   ["referer", els.mappingReferer],
 ];
-
-async function requestJson(url, options = {}) {
-  const response = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload.error || "Request failed.");
-  }
-  return payload;
-}
 
 function setFormError(message = "") {
   if (!message) {
@@ -164,6 +149,7 @@ function renderJob(job) {
     <div class="summary-chip"><span>Output</span><strong>${job.output_dir}</strong></div>
   `;
   els.jobProgressBar.style.width = `${percent}%`;
+  els.jobProgressBar.classList.toggle("is-active", ["queued", "running"].includes(job.status));
 
   els.jobTableBody.innerHTML = "";
   (job.recent_rows || []).forEach((row) => {
@@ -191,7 +177,7 @@ function renderJob(job) {
 function resetJobPanel() {
   state.currentJob = null;
   els.jobSummary.classList.add("empty");
-  els.jobSummary.innerHTML = "<p>No job running yet.</p>";
+  els.jobSummary.innerHTML = emptyStateHtml(EMPTY_SVG.job, "No job running yet.");
   els.jobProgressBar.style.width = "0%";
   els.jobTableBody.innerHTML = "";
   els.jobLog.textContent = "Waiting for a job.";
@@ -202,6 +188,7 @@ function resetJobPanel() {
 
 async function loadPreview(file) {
   setFormError("");
+  validateFileUpload(file);
   els.importStatus.textContent = `Reading ${file.name}...`;
   state.fileName = file.name;
   state.csvText = await file.text();
@@ -229,26 +216,30 @@ function collectMappings() {
 }
 
 function stopPolling() {
-  if (state.pollTimer) {
-    window.clearTimeout(state.pollTimer);
-    state.pollTimer = null;
+  if (state.poller) {
+    state.poller.stop();
+    state.poller = null;
   }
 }
 
-async function pollJob() {
-  if (!state.jobId) {
-    return;
-  }
-  try {
-    const job = await requestJson(`/api/jobs/${state.jobId}`);
-    renderJob(job);
-    const done = ["completed", "completed_with_errors", "cancelled"].includes(job.status);
-    if (!done) {
-      state.pollTimer = window.setTimeout(pollJob, 1000);
+function pollJob() {
+  if (!state.jobId) return;
+  stopPolling();
+  state.poller = createPoller(
+    () => requestJson(`/api/jobs/${state.jobId}`),
+    {
+      onData(job) {
+        renderJob(job);
+        const done = ["completed", "completed_with_errors", "cancelled"].includes(job.status);
+        if (done) {
+          showToast(job.status === "cancelled" ? "Job cancelled" : "Downloads finished", job.status === "cancelled" ? "warning" : "success");
+        }
+        return done;
+      },
+      onDone() { state.poller = null; },
+      onError(err) { setFormError(err.message); },
     }
-  } catch (error) {
-    setFormError(error.message);
-  }
+  );
 }
 
 async function startJob(event) {
@@ -264,7 +255,6 @@ async function startJob(event) {
     return;
   }
 
-  els.startJobButton.disabled = true;
   try {
     const result = await requestJson("/api/jobs", {
       method: "POST",
@@ -274,7 +264,7 @@ async function startJob(event) {
         mappings,
         options: {
           output_dir: els.outputDir.value.trim(),
-          concurrency: Number(els.concurrency.value || 4),
+          concurrency: clampInt(els.concurrency.value, 1, 16, 4),
           collision_strategy: els.collisionStrategy.value,
           use_subdirectories: els.useSubdirectories.checked,
         },
@@ -286,14 +276,14 @@ async function startJob(event) {
     pollJob();
   } catch (error) {
     setFormError(error.message);
-    els.startJobButton.disabled = false;
-    return;
   }
-  els.startJobButton.disabled = false;
 }
 
 async function cancelJob() {
   if (!state.jobId) {
+    return;
+  }
+  if (!(await confirmAction("Cancel Job", "This will stop all active downloads. Are you sure?"))) {
     return;
   }
   try {
@@ -301,6 +291,7 @@ async function cancelJob() {
       method: "POST",
       body: JSON.stringify({}),
     });
+    showToast("Job cancellation requested", "info");
   } catch (error) {
     setFormError(error.message);
   }
@@ -311,7 +302,6 @@ async function retryFailedJob() {
     return;
   }
   setFormError("");
-  els.retryFailedJobButton.disabled = true;
   try {
     const result = await requestJson(`/api/jobs/${state.jobId}/retry-failed`, {
       method: "POST",
@@ -355,9 +345,11 @@ async function init() {
     }
   });
 
-  els.form.addEventListener("submit", startJob);
-  els.cancelJobButton.addEventListener("click", cancelJob);
-  els.retryFailedJobButton.addEventListener("click", retryFailedJob);
+  els.form.addEventListener("submit", withLoading(els.startJobButton, startJob));
+  els.cancelJobButton.addEventListener("click", withLoading(els.cancelJobButton, cancelJob));
+  els.retryFailedJobButton.addEventListener("click", withLoading(els.retryFailedJobButton, retryFailedJob));
+
+  enableDragDrop(document.querySelector(".file-picker"), els.fileInput);
 }
 
 init();

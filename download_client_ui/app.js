@@ -36,7 +36,7 @@ const state = {
   importedCsvFileName: "",
   discoveryJobId: null,
   discoveryJob: null,
-  discoveryPollTimer: null,
+  discoveryPoller: null,
   selectedRecordIds: new Set(),
   filters: {
     search: "",
@@ -44,7 +44,7 @@ const state = {
   },
   downloadJobId: null,
   currentJob: null,
-  downloadPollTimer: null,
+  downloadPoller: null,
   historyJobs: [],
 };
 
@@ -101,21 +101,6 @@ const els = {
   historyList: document.getElementById("history-list"),
 };
 
-async function requestJson(url, options = {}) {
-  const response = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload.error || "Request failed.");
-  }
-  return payload;
-}
-
 function setGlobalError(message = "") {
   if (!message) {
     els.globalError.classList.add("hidden");
@@ -135,7 +120,13 @@ function setActiveStep(step) {
   });
   els.stepPanels.forEach((panel) => {
     const panelStep = Number(panel.dataset.stepPanel);
-    panel.classList.toggle("hidden", panelStep !== step);
+    if (panelStep === step) {
+      panel.classList.remove("hidden");
+      panel.classList.add("is-visible");
+    } else {
+      panel.classList.remove("is-visible");
+      panel.classList.add("hidden");
+    }
   });
 }
 
@@ -218,20 +209,21 @@ function setSourceType(sourceType) {
 }
 
 function stopDiscoveryPolling() {
-  if (state.discoveryPollTimer) {
-    window.clearTimeout(state.discoveryPollTimer);
-    state.discoveryPollTimer = null;
+  if (state.discoveryPoller) {
+    state.discoveryPoller.stop();
+    state.discoveryPoller = null;
   }
 }
 
 function stopDownloadPolling() {
-  if (state.downloadPollTimer) {
-    window.clearTimeout(state.downloadPollTimer);
-    state.downloadPollTimer = null;
+  if (state.downloadPoller) {
+    state.downloadPoller.stop();
+    state.downloadPoller = null;
   }
 }
 
 async function loadImportedCsv(file) {
+  validateFileUpload(file);
   state.importedCsvFileName = file.name;
   state.importedCsvText = await file.text();
   els.scrapeCsvStatus.textContent = `Loaded ${file.name}.`;
@@ -346,14 +338,6 @@ function pageGroupVisibleRecords(page) {
     .filter((recordId) => visibleIds.has(recordId))
     .map((recordId) => recordMap.get(recordId))
     .filter(Boolean);
-}
-
-function escapeHtml(value) {
-  return String(value || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
 }
 
 function renderSelectionGroups() {
@@ -476,6 +460,7 @@ function renderJob(job) {
     <div class="summary-chip"><span>Output</span><strong>${job.output_dir}</strong></div>
   `;
   els.jobProgressBar.style.width = `${percent}%`;
+  els.jobProgressBar.classList.toggle("is-active", ["queued", "running"].includes(job.status));
 
   els.jobTableBody.innerHTML = "";
   (job.recent_rows || []).forEach((row) => {
@@ -503,7 +488,7 @@ function renderJob(job) {
 
 function renderHistory() {
   if (!state.historyJobs.length) {
-    els.historyList.innerHTML = '<div class="muted">No persisted sessions yet.</div>';
+    els.historyList.innerHTML = emptyStateHtml(EMPTY_SVG.folder, "No persisted sessions yet.");
     return;
   }
   els.historyList.innerHTML = state.historyJobs
@@ -556,61 +541,64 @@ async function loadHistory() {
   }
 }
 
-async function pollDiscovery() {
-  if (!state.discoveryJobId) {
-    return;
-  }
-  try {
-    const job = await requestJson(`/api/discovery-jobs/${state.discoveryJobId}`);
-    state.discoveryJob = job;
-    renderDiscoveryStatus(job);
-    if ((job.records || []).length) {
-      renderDiscoverySummary(job);
-      renderSelectionSummary();
-      renderSelectionGroups();
-      if (state.activeStep < 2) {
-        setActiveStep(2);
-      }
+function pollDiscovery() {
+  if (!state.discoveryJobId) return;
+  stopDiscoveryPolling();
+  state.discoveryPoller = createPoller(
+    () => requestJson(`/api/discovery-jobs/${state.discoveryJobId}`),
+    {
+      onData(job) {
+        state.discoveryJob = job;
+        renderDiscoveryStatus(job);
+        if ((job.records || []).length) {
+          renderDiscoverySummary(job);
+          renderSelectionSummary();
+          renderSelectionGroups();
+          if (state.activeStep < 2) setActiveStep(2);
+        }
+        if (job.status === "completed") {
+          state.selectedRecordIds = new Set((job.records || []).map((r) => r.id));
+          renderDiscoverySummary(job);
+          renderSelectionSummary();
+          renderSelectionGroups();
+          setActiveStep(2);
+          showToast(`Discovery complete \u2014 ${(job.records || []).length} files found`, "success");
+          return true;
+        }
+        if (job.status === "failed") {
+          setGlobalError(job.error || "Discovery failed.");
+          showToast("Discovery failed", "error");
+          return true;
+        }
+        return false;
+      },
+      onDone() { state.discoveryPoller = null; },
+      onError(err) { setGlobalError(err.message); },
     }
-    if (job.status === "completed") {
-      state.selectedRecordIds = new Set((job.records || []).map((record) => record.id));
-      renderDiscoverySummary(job);
-      renderSelectionSummary();
-      renderSelectionGroups();
-      setActiveStep(2);
-      stopDiscoveryPolling();
-      return;
-    }
-    if (job.status === "failed") {
-      stopDiscoveryPolling();
-      setGlobalError(job.error || "Discovery failed.");
-      return;
-    }
-    state.discoveryPollTimer = window.setTimeout(pollDiscovery, 1000);
-  } catch (error) {
-    setGlobalError(error.message);
-  }
+  );
 }
 
-async function pollDownloadJob() {
-  if (!state.downloadJobId) {
-    return;
-  }
-  try {
-    const job = await requestJson(`/api/jobs/${state.downloadJobId}`);
-    renderJob(job);
-    const done = ["completed", "completed_with_errors", "cancelled"].includes(job.status);
-    if (!done) {
-      state.downloadPollTimer = window.setTimeout(pollDownloadJob, 1000);
-      return;
+function pollDownloadJob() {
+  if (!state.downloadJobId) return;
+  stopDownloadPolling();
+  state.downloadPoller = createPoller(
+    () => requestJson(`/api/jobs/${state.downloadJobId}`),
+    {
+      onData(job) {
+        renderJob(job);
+        const done = ["completed", "completed_with_errors", "cancelled"].includes(job.status);
+        if (done) {
+          renderReview(job);
+          setActiveStep(5);
+          showToast(job.status === "cancelled" ? "Job cancelled" : "Downloads finished", job.status === "cancelled" ? "warning" : "success");
+          loadHistory();
+        }
+        return done;
+      },
+      onDone() { state.downloadPoller = null; },
+      onError(err) { setGlobalError(err.message); },
     }
-    stopDownloadPolling();
-    renderReview(job);
-    setActiveStep(5);
-    await loadHistory();
-  } catch (error) {
-    setGlobalError(error.message);
-  }
+  );
 }
 
 function syncSelectionFromPage(pageSource, checked) {
@@ -676,10 +664,7 @@ async function startDiscovery(event) {
 
     if (state.sourceType === "media") {
       const sourceUrl = els.mediaUrl.value.trim();
-      if (!sourceUrl) {
-        setGlobalError("Enter a media URL first.");
-        return;
-      }
+      validateHttpUrl(sourceUrl, "Media URL");
       const outputDir = els.outputDir.value.trim() || state.appInfo?.default_output_dir || "";
       window.sessionStorage.setItem(SESSION_OUTPUT_DIR_KEY, outputDir);
       const result = await requestJson("/api/media-jobs", {
@@ -691,28 +676,24 @@ async function startDiscovery(event) {
             download_type: els.mediaType.value,
             format: els.mediaFormat.value,
             quality: els.mediaQuality.value,
-            playlist_limit: Number(els.mediaPlaylistLimit.value || 0),
+            playlist_limit: clampInt(els.mediaPlaylistLimit.value, 0, 9999, 0),
             subdir: els.mediaSubdir.value.trim(),
           },
         }),
       });
       state.downloadJobId = result.job_id;
       setActiveStep(4);
-      stopDownloadPolling();
       pollDownloadJob();
       return;
     }
 
     const startUrl = els.startUrl.value.trim();
-    if (!startUrl) {
-      setGlobalError("Enter a start URL first.");
-      return;
-    }
+    validateHttpUrl(startUrl, "Start URL");
 
     const payload = {
       start_url: startUrl,
       scan_mode: els.scanMode.value,
-      depth_limit: Number(els.depthLimit.value || 2),
+      depth_limit: clampInt(els.depthLimit.value, 1, 5, 2),
       profile: "auto",
     };
     const result = await requestJson("/api/discovery-jobs", {
@@ -746,30 +727,28 @@ async function startDownloads(event) {
   const outputDir = els.outputDir.value.trim() || state.appInfo?.default_output_dir || "";
   window.sessionStorage.setItem(SESSION_OUTPUT_DIR_KEY, outputDir);
 
-  try {
-    const result = await requestJson("/api/download-jobs/from-discovery", {
-      method: "POST",
-      body: JSON.stringify({
-        discovery_job_id: state.discoveryJobId,
-        selected_record_ids: Array.from(state.selectedRecordIds),
-        options: {
-          output_dir: outputDir,
-          concurrency: Number(els.concurrency.value || 1),
-          collision_strategy: els.collisionStrategy.value,
-        },
-      }),
-    });
-    state.downloadJobId = result.job_id;
-    setActiveStep(4);
-    stopDownloadPolling();
-    pollDownloadJob();
-  } catch (error) {
-    setGlobalError(error.message);
-  }
+  const result = await requestJson("/api/download-jobs/from-discovery", {
+    method: "POST",
+    body: JSON.stringify({
+      discovery_job_id: state.discoveryJobId,
+      selected_record_ids: Array.from(state.selectedRecordIds),
+      options: {
+        output_dir: outputDir,
+        concurrency: clampInt(els.concurrency.value, 1, 16, 1),
+        collision_strategy: els.collisionStrategy.value,
+      },
+    }),
+  });
+  state.downloadJobId = result.job_id;
+  setActiveStep(4);
+  pollDownloadJob();
 }
 
 async function cancelJob() {
   if (!state.downloadJobId) {
+    return;
+  }
+  if (!(await confirmAction("Cancel Job", "This will stop all active downloads. Are you sure?"))) {
     return;
   }
   try {
@@ -777,6 +756,7 @@ async function cancelJob() {
       method: "POST",
       body: JSON.stringify({}),
     });
+    showToast("Job cancellation requested", "info");
   } catch (error) {
     setGlobalError(error.message);
   }
@@ -825,7 +805,7 @@ function restoreSessionOutputDir() {
 }
 
 function bindEvents() {
-  els.discoveryForm.addEventListener("submit", startDiscovery);
+  els.discoveryForm.addEventListener("submit", withLoading(els.startDiscoveryButton, startDiscovery));
   els.sourceUrlButton.addEventListener("click", () => setSourceType("url"));
   els.sourceCsvButton.addEventListener("click", () => setSourceType("csv"));
   els.sourceMediaButton.addEventListener("click", () => setSourceType("media"));
@@ -857,7 +837,10 @@ function bindEvents() {
     renderSelectionGroups();
   });
   els.selectAllVisible.addEventListener("click", () => syncSelectionFromVisible(true));
-  els.clearAllVisible.addEventListener("click", () => syncSelectionFromVisible(false));
+  els.clearAllVisible.addEventListener("click", async () => {
+    if (state.selectedRecordIds.size > 0 && !(await confirmAction("Clear Selection", "Deselect all visible files?"))) return;
+    syncSelectionFromVisible(false);
+  });
   els.toSettings.addEventListener("click", () => {
     restoreSessionOutputDir();
     setActiveStep(3);
@@ -883,13 +866,13 @@ function bindEvents() {
     }
   });
 
-  els.downloadSettingsForm.addEventListener("submit", startDownloads);
+  els.downloadSettingsForm.addEventListener("submit", withLoading(document.getElementById("start-downloads"), startDownloads));
   els.outputDir.addEventListener("input", () => {
     window.sessionStorage.setItem(SESSION_OUTPUT_DIR_KEY, els.outputDir.value.trim());
   });
-  els.cancelJobButton.addEventListener("click", cancelJob);
-  els.retryFailedJobButton.addEventListener("click", retryFailedJob);
-  els.reviewRetryFailed.addEventListener("click", retryFailedJob);
+  els.cancelJobButton.addEventListener("click", withLoading(els.cancelJobButton, cancelJob));
+  els.retryFailedJobButton.addEventListener("click", withLoading(els.retryFailedJobButton, retryFailedJob));
+  els.reviewRetryFailed.addEventListener("click", withLoading(els.reviewRetryFailed, retryFailedJob));
   els.historyList.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) {
@@ -901,6 +884,8 @@ function bindEvents() {
     }
     openHistoryJob(button.dataset.openHistory);
   });
+
+  enableDragDrop(document.querySelector("#csv-source-fields .file-picker"), els.scrapeCsvFile);
 }
 
 async function init() {

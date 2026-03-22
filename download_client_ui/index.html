@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DownloadScapper</title>
     <link rel="stylesheet" href="/assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23db5f2b'/><path d='M16 6v14M10 14l6 6 6-6' stroke='white' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/><path d='M8 24h16' stroke='white' stroke-width='2.5' stroke-linecap='round'/></svg>">
+    <script>
+      (function(){var t=localStorage.getItem('downloadscapper.theme');if(t==='dark'||(!t&&matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.setAttribute('data-theme','dark');else document.documentElement.setAttribute('data-theme','light')})();
+    </script>
   </head>
   <body>
     <div class="page-shell wizard-shell">
@@ -15,6 +19,13 @@
           <a class="shell-nav-link" href="/advanced">Advanced</a>
           <a class="shell-nav-link" href="/history">History</a>
           <a class="shell-nav-link" href="/database">Database</a>
+          <button class="shell-nav-link theme-toggle" type="button" aria-label="Toggle dark mode">
+            <svg class="theme-icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+            <svg class="theme-icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1111.21 3a7 7 0 009.79 9.79z"/></svg>
+          </button>
+          <button class="shell-nav-link keyboard-help" type="button" aria-label="Keyboard shortcuts" title="Enter = advance step, Esc = go back">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>
+          </button>
         </nav>
         <div class="hero-grid">
           <div>
@@ -56,35 +67,35 @@
           </div>
           <ol class="stepper" id="stepper">
             <li class="stepper-item is-active" data-step="1">
-              <span class="step-index">1</span>
+              <span class="step-index"><span class="step-number">1</span><svg class="step-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 13l4 4L19 7"/></svg></span>
               <div>
                 <strong>Start</strong>
                 <span>Enter URL and choose the crawl style.</span>
               </div>
             </li>
             <li class="stepper-item" data-step="2">
-              <span class="step-index">2</span>
+              <span class="step-index"><span class="step-number">2</span><svg class="step-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 13l4 4L19 7"/></svg></span>
               <div>
                 <strong>Choose Downloads</strong>
                 <span>Review discovered files and trim the list.</span>
               </div>
             </li>
             <li class="stepper-item" data-step="3">
-              <span class="step-index">3</span>
+              <span class="step-index"><span class="step-number">3</span><svg class="step-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 13l4 4L19 7"/></svg></span>
               <div>
                 <strong>Download Settings</strong>
                 <span>Set the output folder for this browser session.</span>
               </div>
             </li>
             <li class="stepper-item" data-step="4">
-              <span class="step-index">4</span>
+              <span class="step-index"><span class="step-number">4</span><svg class="step-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 13l4 4L19 7"/></svg></span>
               <div>
                 <strong>Downloading</strong>
                 <span>Track progress, bytes, and recent file activity.</span>
               </div>
             </li>
             <li class="stepper-item" data-step="5">
-              <span class="step-index">5</span>
+              <span class="step-index"><span class="step-number">5</span><svg class="step-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 13l4 4L19 7"/></svg></span>
               <div>
                 <strong>Review</strong>
                 <span>See totals, failures, and the manifest path.</span>
@@ -94,7 +105,7 @@
         </aside>
 
         <section class="wizard-main">
-          <section class="panel wizard-step" data-step-panel="1">
+          <section class="panel wizard-step is-visible" data-step-panel="1">
             <div class="panel-head">
               <h2>1. Start</h2>
               <p>Start from a live URL or load a previously saved scrape CSV.</p>
@@ -194,7 +205,7 @@
               <p>Filter the results, select whole sections, or uncheck individual files before downloading.</p>
             </div>
             <div id="discovery-summary" class="job-summary empty">
-              <p>No discovery results yet.</p>
+              <div class="empty-state"><svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="26" cy="26" r="16"/><path d="M38 38l10 10"/><path d="M20 24h12M20 30h8"/></svg><p>No discovery results yet.</p></div>
             </div>
             <div class="selection-toolbar">
               <label class="selection-search">
@@ -261,7 +272,7 @@
               <p>Live status for the active download job.</p>
             </div>
             <div id="job-summary" class="job-summary empty">
-              <p>No job running yet.</p>
+              <div class="empty-state"><svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="32" cy="32" r="22" stroke-dasharray="6 4"/><path d="M28 26l10 6-10 6z"/></svg><p>No job running yet.</p></div>
             </div>
             <div class="progress-shell">
               <div id="job-progress-bar" class="progress-bar"></div>
@@ -300,7 +311,7 @@
               <p>Final totals, failures, and where the files ended up.</p>
             </div>
             <div id="review-summary" class="job-summary empty">
-              <p>No completed session yet.</p>
+              <div class="empty-state"><svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="32" cy="32" r="22"/><path d="M32 18v16l10 6"/></svg><p>No completed session yet.</p></div>
             </div>
             <div id="review-manifest" class="stat-strip empty">
               <span>Manifest path will appear here after the run.</span>
@@ -323,6 +334,7 @@
       </main>
     </div>
 
+    <script src="/assets/shared.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </body>
 </html>

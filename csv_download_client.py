@@ -2342,6 +2342,10 @@ class DownloadClientHandler(BaseHTTPRequestHandler):
         parsed_path = parse.urlparse(self.path)
         route = parsed_path.path
         query_params = parse.parse_qs(parsed_path.query)
+        if route == "/favicon.ico":
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.end_headers()
+            return
         if route == "/":
             self.serve_static("index.html")
             return

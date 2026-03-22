@@ -13,29 +13,6 @@ const historyEls = {
   discoveryList: document.getElementById("discovery-history-list"),
 };
 
-async function requestJson(url, options = {}) {
-  const response = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload.error || "Request failed.");
-  }
-  return payload;
-}
-
-function escapeHtml(value) {
-  return String(value || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
 function renderOverview() {
   if (!historyState.appInfo) {
     historyEls.overview.classList.add("empty");
@@ -55,7 +32,7 @@ function renderOverview() {
 function renderDownloadJobs() {
   historyEls.downloadCount.textContent = String(historyState.jobs.length);
   if (!historyState.jobs.length) {
-    historyEls.downloadList.innerHTML = '<div class="muted">No persisted download jobs yet.</div>';
+    historyEls.downloadList.innerHTML = emptyStateHtml(EMPTY_SVG.folder, "No persisted download jobs yet.");
     return;
   }
   historyEls.downloadList.innerHTML = historyState.jobs.map((job) => {
@@ -85,7 +62,7 @@ function renderDownloadJobs() {
 function renderDiscoveryJobs() {
   historyEls.discoveryCount.textContent = String(historyState.discoveryJobs.length);
   if (!historyState.discoveryJobs.length) {
-    historyEls.discoveryList.innerHTML = '<div class="muted">No persisted discovery runs yet.</div>';
+    historyEls.discoveryList.innerHTML = emptyStateHtml(EMPTY_SVG.search, "No persisted discovery runs yet.");
     return;
   }
   historyEls.discoveryList.innerHTML = historyState.discoveryJobs.map((job) => `

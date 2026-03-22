@@ -16,29 +16,6 @@ const databaseEls = {
   results: document.getElementById("database-results"),
 };
 
-async function requestJson(url, options = {}) {
-  const response = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload.error || "Request failed.");
-  }
-  return payload;
-}
-
-function escapeHtml(value) {
-  return String(value || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
 function renderStats() {
   const stats = databaseState.stats;
   const dbPath = databaseState.appInfo?.database_path || stats?.db_path || "Unavailable";
@@ -89,7 +66,7 @@ function renderResults(payload) {
     return;
   }
   if (!(payload.results || []).length) {
-    databaseEls.results.innerHTML = '<div class="muted">No matches for that query.</div>';
+    databaseEls.results.innerHTML = emptyStateHtml(EMPTY_SVG.search, "No matches for that query.");
     return;
   }
   databaseEls.results.innerHTML = payload.results.map((item) => `
@@ -119,7 +96,7 @@ async function runSearch(event) {
   const query = databaseEls.query.value.trim();
   if (!query) {
     databaseEls.searchStatus.textContent = "Enter a query to search the index.";
-    databaseEls.results.innerHTML = '<div class="muted">No search yet.</div>';
+    databaseEls.results.innerHTML = emptyStateHtml(EMPTY_SVG.search, "Enter a query to search the index.");
     return;
   }
   const limit = Number(databaseEls.limit.value || 25);
@@ -150,5 +127,5 @@ async function initDatabasePage() {
   }
 }
 
-databaseEls.searchForm.addEventListener("submit", runSearch);
+databaseEls.searchForm.addEventListener("submit", withLoading(document.getElementById("search-btn"), runSearch));
 initDatabasePage();
