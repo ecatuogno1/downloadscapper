@@ -1,0 +1,1 @@
+# DownloadScapper test suite
