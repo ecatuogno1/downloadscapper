@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+"""DownloadScapper — single entry point for all tools.
+
+Sub-commands
+------------
+- ui             Launch the browser-based CSV download client.
+- crawl-vimm     Run the Vimm disc-system crawler.
+- build-master   Build the master de-duplicated Vimm dataset.
+- build-exports  Build derived Vimm export files.
+- enrich-vimm    Enrich a Vimm crawl report with platform labels.
+- downloads-db   Build or query the SQLite downloads database.
+- rebuild-vimm   Run the common Vimm rebuild flow in sequence.
+- doctor         Check workspace health.
+- gen-config     Write an example config.toml to the project directory.
+"""
 
 from __future__ import annotations
 
@@ -24,10 +38,18 @@ SCRIPT_BY_COMMAND = {
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Single entry point for the DownloadScapper tools."
+        description="Single entry point for the DownloadScapper tools.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity for this process. Default: INFO",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # ---- doctor --------------------------------------------------------
     doctor_parser = subparsers.add_parser(
         "doctor",
         help="Check that the workspace has the expected scripts and folders.",
@@ -38,6 +60,13 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Local data workspace to inspect. Default: {WORKSPACE_DIR}",
     )
 
+    # ---- gen-config ----------------------------------------------------
+    subparsers.add_parser(
+        "gen-config",
+        help="Write an example config.toml to the project directory.",
+    )
+
+    # ---- pass-through commands -----------------------------------------
     for command, help_text in (
         ("ui", "Launch the browser-based CSV download client."),
         ("crawl-vimm", "Run the Vimm disc-system crawler."),
@@ -53,6 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
             help="Arguments forwarded to the underlying script.",
         )
 
+    # ---- rebuild-vimm --------------------------------------------------
     rebuild_parser = subparsers.add_parser(
         "rebuild-vimm",
         help="Run the common Vimm rebuild flow in sequence.",
@@ -100,6 +130,21 @@ def run_step(label: str, script_path: Path, extra_args: list[str]) -> None:
     print(f"==> {label}", flush=True)
     cmd = [sys.executable, str(script_path), *extra_args]
     subprocess.run(cmd, check=True)
+
+
+def run_gen_config() -> int:
+    try:
+        from config import write_example_config
+        dest = PROJECT_DIR / "config.toml"
+        if dest.exists():
+            print(f"config.toml already exists at {dest}. Remove it first or edit it directly.")
+            return 1
+        write_example_config(dest)
+        print(f"Example config.toml written to: {dest}")
+        return 0
+    except Exception as exc:
+        print(f"Error writing config: {exc}", file=sys.stderr)
+        return 1
 
 
 def run_doctor(base_dir: Path) -> int:
@@ -172,8 +217,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    # Configure logging early so sub-commands also benefit
+    try:
+        from logging_setup import setup_logging, level_from_string
+        setup_logging(level=level_from_string(getattr(args, "log_level", "INFO")))
+    except Exception:
+        pass  # Logging is non-critical for the launcher
+
     if args.command == "doctor":
         return run_doctor(Path(args.base_dir).expanduser().resolve())
+
+    if args.command == "gen-config":
+        return run_gen_config()
 
     if args.command == "rebuild-vimm":
         return run_rebuild_vimm(args)

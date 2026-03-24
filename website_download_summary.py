@@ -8,6 +8,7 @@ import binascii
 import concurrent.futures
 import csv
 import json
+import logging
 import mimetypes
 import posixpath
 import re
@@ -16,11 +17,15 @@ import sys
 import threading
 import time
 from collections import Counter, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable, Iterable
 from urllib import error, parse, request, robotparser
+
+from logging_setup import get_logger
+
+_log = get_logger(__name__)
 
 
 BOT_NAME = "DownloadSummaryBot"
@@ -192,6 +197,27 @@ class RequestSettings:
     throttle: "HostThrottle | None" = None
     ssl_context: ssl.SSLContext | None = None
     crawl_workers: int = 1
+    # HTTP/HTTPS proxy URL, e.g. "http://user:pass@proxy:8080"
+    proxy: str | None = None
+    # Extra headers merged into every outgoing request
+    custom_headers: dict[str, str] = field(default_factory=dict)
+
+
+def _build_opener(settings: RequestSettings) -> request.OpenerDirector:
+    """Build a urllib opener honouring proxy and SSL settings."""
+    handlers: list[request.BaseHandler] = []
+    if settings.proxy:
+        handlers.append(
+            request.ProxyHandler(
+                {"http": settings.proxy, "https": settings.proxy}
+            )
+        )
+    else:
+        # Explicitly disable system proxy so behaviour is predictable
+        handlers.append(request.ProxyHandler({}))
+    if settings.ssl_context is not None:
+        handlers.append(request.HTTPSHandler(context=settings.ssl_context))
+    return request.build_opener(*handlers)
 
 
 class AnchorParser(HTMLParser):
@@ -371,6 +397,25 @@ def parse_args() -> argparse.Namespace:
         "--insecure",
         action="store_true",
         help="Disable TLS certificate verification for sites with broken cert chains.",
+    )
+    parser.add_argument(
+        "--proxy",
+        default=None,
+        help="HTTP/HTTPS proxy URL, e.g. http://user:pass@proxy:8080",
+    )
+    parser.add_argument(
+        "--header",
+        dest="extra_headers",
+        action="append",
+        default=[],
+        metavar="NAME:VALUE",
+        help="Extra request header to send (repeatable), e.g. --header 'X-Token:abc'",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity. Default: INFO",
     )
     parser.add_argument(
         "--show-links",
@@ -655,26 +700,28 @@ def make_request(
     extra_headers: dict[str, str] | None = None,
 ):
     headers = {"User-Agent": DEFAULT_USER_AGENT}
+    # Apply settings-level custom headers first, then per-call extras
+    if settings.custom_headers:
+        headers.update(settings.custom_headers)
     if extra_headers:
         headers.update(extra_headers)
+    opener = _build_opener(settings)
     retries = max(settings.retries, 0)
     for attempt in range(retries + 1):
         if settings.throttle is not None:
             settings.throttle.wait(url)
         req = request.Request(url, headers=headers, method=method)
         try:
-            return request.urlopen(
-                req,
-                timeout=settings.timeout,
-                context=settings.ssl_context,
-            )
+            return opener.open(req, timeout=settings.timeout)
         except error.HTTPError as exc:
             if exc.code in DEFAULT_RETRYABLE_STATUS_CODES and attempt < retries:
+                _log.debug("HTTP %s for %s, retrying (attempt %d/%d)", exc.code, url, attempt + 1, retries + 1)
                 sleep_before_retry(attempt, settings.backoff)
                 continue
             raise
         except (error.URLError, TimeoutError, OSError):
             if attempt < retries:
+                _log.debug("Network error for %s, retrying (attempt %d/%d)", url, attempt + 1, retries + 1)
                 sleep_before_retry(attempt, settings.backoff)
                 continue
             raise
@@ -1332,14 +1379,37 @@ def write_csv_output(path_text: str, records: list[DownloadRecord]) -> Path:
 
 def main() -> int:
     args = parse_args()
+
+    from logging_setup import setup_logging, level_from_string
+    setup_logging(level=level_from_string(args.log_level))
+
+    # Parse extra headers from --header NAME:VALUE flags
+    extra_headers: dict[str, str] = {}
+    for raw in getattr(args, "extra_headers", []):
+        if ":" in raw:
+            name, _, value = raw.partition(":")
+            extra_headers[name.strip()] = value.strip()
+
+    if args.insecure:
+        _log.warning(
+            "TLS certificate verification is DISABLED (--insecure). "
+            "Only use this for development or sites with broken cert chains."
+        )
+        ssl_ctx: ssl.SSLContext | None = ssl._create_unverified_context()
+    else:
+        ssl_ctx = None
+
     settings = RequestSettings(
         timeout=args.timeout,
         retries=max(args.retries, 0),
         backoff=max(args.backoff, 0.0),
-        ssl_context=ssl._create_unverified_context() if args.insecure else None,
+        ssl_context=ssl_ctx,
         crawl_workers=max(args.workers, 1),
+        proxy=args.proxy or None,
+        custom_headers=extra_headers,
     )
 
+    _log.info("Starting crawl: %s (max_pages=%d, workers=%d)", args.url, args.max_pages, args.workers)
     try:
         summary, records, _stats = run_discovery(
             start_url=args.url,
@@ -1350,11 +1420,11 @@ def main() -> int:
             inspect_workers=max(args.workers, 1),
         )
     except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        _log.error("Crawl failed: %s", exc)
         return 2
 
     if not records:
-        print("No likely download links were found.")
+        _log.info("No likely download links were found.")
         return 0
 
     print_summary(summary)
@@ -1364,6 +1434,7 @@ def main() -> int:
 
     if args.json_out:
         json_path = write_json_output(args.json_out, summary, records)
+        _log.info("Wrote JSON output: %s", json_path)
         print(f"\nWrote JSON output: {json_path}")
 
     if args.csv_out:

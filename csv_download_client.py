@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import email.utils
+import hashlib
 import io
 import json
 import mimetypes
@@ -14,6 +16,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -28,8 +31,17 @@ from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
 
-from project_paths import default_workspace_dir
+from config import load_config
+from logging_setup import get_logger, setup_logging, level_from_string
+from project_paths import (
+    default_workspace_dir,
+    DEFAULT_DOWNLOADS_ROOT,
+    DEFAULT_SCRAPE_SAVE_DIR,
+    DEFAULT_STATE_DIR,
+)
 from website_download_summary import CrawlLink, DownloadRecord, RequestSettings, run_discovery
+
+_log = get_logger(__name__)
 
 APP_NAME = "DownloadScapper"
 USER_AGENT = "Mozilla/5.0 (compatible; CSVDownloadClient/1.0; +http://127.0.0.1)"
@@ -37,9 +49,9 @@ DEFAULT_PORT = 8765
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_WORKERS = 1
 DEFAULT_TIMEOUT = 60
-DEFAULT_OUTPUT_DIR = Path.home() / "Downloads" / "csv-download-client"
-DEFAULT_SCRAPE_SAVE_DIR = Path.home() / "Downloads" / "downloadscapper-scrapes"
-DEFAULT_STATE_DIR = Path.home() / "Downloads" / "downloadscapper-state"
+DEFAULT_OUTPUT_DIR = DEFAULT_DOWNLOADS_ROOT
+_DEFAULT_SCRAPE_SAVE_DIR = DEFAULT_SCRAPE_SAVE_DIR
+_DEFAULT_STATE_DIR = DEFAULT_STATE_DIR
 CHUNK_SIZE = 64 * 1024
 LOG_LIMIT = 200
 RECENT_ROWS_LIMIT = 24
@@ -221,6 +233,110 @@ class HostThrottle:
             time.sleep(sleep_for)
 
 
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    """Write *data* to *path* atomically via a temporary file + rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_name = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "wb") as fh:
+            fh.write(data)
+        Path(tmp_name).replace(path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def validate_subdir_path(subdir: str | None) -> str | None:
+    """Validate and sanitise a user-supplied subdirectory hint.
+
+    Returns *None* if the value is empty or contains path traversal sequences
+    (``..`` components, absolute paths, or null bytes).
+    """
+    if not subdir:
+        return None
+    # Reject null bytes
+    if "\x00" in subdir:
+        return None
+    # Normalise separators
+    cleaned = subdir.replace("\\", "/").strip("/")
+    if not cleaned:
+        return None
+    parts = [p for p in cleaned.split("/") if p and p != "."]
+    # Reject any traversal component
+    if any(p == ".." for p in parts) or not parts:
+        return None
+    return "/".join(parts)
+
+
+def compute_file_hash(path: Path, algorithm: str = "sha256") -> str | None:
+    """Return the hex digest of *path* using *algorithm*, or None on error."""
+    try:
+        h = hashlib.new(algorithm)
+        with path.open("rb") as fh:
+            while chunk := fh.read(65536):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def send_webhook_notification(url: str, payload: dict[str, Any], timeout: float = 10.0) -> None:
+    """POST a JSON payload to a webhook URL. Errors are silently logged."""
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = request.Request(
+            url,
+            data=data,
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "User-Agent": USER_AGENT,
+            },
+            method="POST",
+        )
+        request.urlopen(req, timeout=timeout)
+    except Exception as exc:
+        _log.warning("Webhook notification to %s failed: %s", url, exc)
+
+
+def load_netscape_cookies(cookies_file: Path) -> dict[str, str]:
+    """Parse a Netscape-format cookies.txt file into a {name: value} dict.
+
+    Only cookies that are not expired and match any domain are loaded.
+    Lines starting with ``#`` are ignored.
+    """
+    cookies: dict[str, str] = {}
+    if not cookies_file.exists():
+        _log.warning("Cookies file not found: %s", cookies_file)
+        return cookies
+    try:
+        for line in cookies_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            fields = line.split("\t")
+            if len(fields) < 7:
+                continue
+            # Fields: domain, include_subdomains, path, secure, expiry, name, value
+            _domain, _sub, _path, _secure, expiry_str, name, value = fields[:7]
+            try:
+                expiry = int(expiry_str)
+                if expiry != 0 and expiry < int(time.time()):
+                    continue  # expired
+            except ValueError:
+                pass
+            cookies[name] = value
+    except OSError as exc:
+        _log.warning("Could not read cookies file %s: %s", cookies_file, exc)
+    return cookies
+
+
 class AppState:
     def __init__(
         self,
@@ -273,16 +389,16 @@ class AppState:
         return self.state_dir / "discovery" / f"{job_id}.json"
 
     def persist_job(self, job: DownloadJob) -> None:
-        self._job_path(job.job_id).write_text(
-            json.dumps(serialize_job(job), indent=2),
-            encoding="utf-8",
-        )
+        """Atomically persist job state using a temp-file + replace pattern."""
+        target = self._job_path(job.job_id)
+        data = json.dumps(serialize_job(job), indent=2).encode("utf-8")
+        _atomic_write(target, data)
 
     def persist_discovery_job(self, job: DiscoveryJob) -> None:
-        self._discovery_job_path(job.job_id).write_text(
-            json.dumps(serialize_discovery_job(job), indent=2),
-            encoding="utf-8",
-        )
+        """Atomically persist discovery job state."""
+        target = self._discovery_job_path(job.job_id)
+        data = json.dumps(serialize_discovery_job(job), indent=2).encode("utf-8")
+        _atomic_write(target, data)
 
     def load_persisted_state(self) -> None:
         for path in sorted((self.state_dir / "jobs").glob("*.json")):
@@ -1430,7 +1546,12 @@ def build_media_command(job: DownloadJob, row: RowTask) -> list[str]:
     ]
 
     if cookies_path:
-        cmd.extend(["--cookies", cookies_path])
+        # Validate cookies path exists and is a plain file to prevent injection
+        cookies_resolved = Path(cookies_path).expanduser().resolve()
+        if cookies_resolved.is_file():
+            cmd.extend(["--cookies", str(cookies_resolved)])
+        else:
+            _log.warning("Cookies file not found or not a file: %s", cookies_path)
     if playlist_limit > 0:
         cmd.extend(["--playlist-end", str(playlist_limit)])
     if download_type == "audio":
@@ -1452,7 +1573,12 @@ def build_media_command(job: DownloadJob, row: RowTask) -> list[str]:
         if output_format == "mp4":
             cmd.extend(["--merge-output-format", "mp4"])
 
-    cmd.append(str(row.download_url or ""))
+    # Sanitize URL before passing to subprocess: must be http/https
+    media_url = str(row.download_url or "").strip()
+    parsed_media_url = parse.urlparse(media_url)
+    if parsed_media_url.scheme not in {"http", "https"} or not parsed_media_url.netloc:
+        raise ValueError(f"Invalid media URL scheme or host: {media_url!r}")
+    cmd.append(media_url)
     return cmd
 
 
@@ -1975,14 +2101,43 @@ def parse_content_length(headers) -> int | None:
         return None
 
 
-def build_request(row: RowTask, method_override: str | None = None) -> request.Request:
+def build_request(
+    row: RowTask,
+    options: dict[str, Any],
+    method_override: str | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> request.Request:
     assert row.download_url
     method = (method_override or row.method).upper()
-    headers = {"User-Agent": USER_AGENT}
+    headers: dict[str, str] = {"User-Agent": USER_AGENT}
+
+    # Custom headers from job options (lowest priority)
+    custom_headers = options.get("custom_headers") or {}
+    if custom_headers:
+        headers.update(custom_headers)
+
+    # Per-call extra headers
+    if extra_headers:
+        headers.update(extra_headers)
+
+    # Referer / Origin
     if row.referer:
         headers["Referer"] = row.referer
         if method != "GET" and (origin := origin_from_url(row.referer)):
             headers["Origin"] = origin
+
+    # HTTP Basic Auth
+    basic_auth = options.get("basic_auth") or ""
+    if basic_auth and ":" in basic_auth:
+        token = base64.b64encode(basic_auth.encode("utf-8")).decode("ascii")
+        headers["Authorization"] = f"Basic {token}"
+
+    # Cookies loaded from a cookies file (key=value added to Cookie header)
+    cookies_file_path = options.get("cookies_file") or ""
+    if cookies_file_path:
+        cookies = load_netscape_cookies(Path(cookies_file_path).expanduser())
+        if cookies:
+            headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
 
     url = row.download_url
     data: bytes | None = None
@@ -2004,6 +2159,26 @@ def build_request(row: RowTask, method_override: str | None = None) -> request.R
             data = parse.urlencode(list(row.request_data)).encode("utf-8")
             headers["Content-Type"] = "application/x-www-form-urlencoded"
     return request.Request(url, headers=headers, data=data, method=method)
+
+
+def build_opener_for_job(options: dict[str, Any]) -> request.OpenerDirector:
+    """Build a urllib opener that honours proxy and SSL settings for a download job."""
+    handlers: list[request.BaseHandler] = []
+    proxy_url = options.get("proxy") or ""
+    if proxy_url:
+        handlers.append(
+            request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+        )
+    else:
+        handlers.append(request.ProxyHandler({}))
+    if not options.get("verify_ssl", True):
+        import ssl as _ssl
+        _log.warning(
+            "TLS certificate verification is DISABLED for this job. "
+            "Only use this for development or sites with broken cert chains."
+        )
+        handlers.append(request.HTTPSHandler(context=_ssl._create_unverified_context()))
+    return request.build_opener(*handlers)
 
 
 def should_fallback_to_post(row: RowTask, method_override: str | None, exc: error.HTTPError) -> bool:
@@ -2053,48 +2228,129 @@ def should_retry_url_error(exc: error.URLError) -> bool:
 def transfer_download(job: DownloadJob, row: RowTask, method_override: str | None = None) -> None:
     target_path: Path | None = None
     temp_path: Path | None = None
-    req = build_request(row, method_override=method_override)
+    opener = build_opener_for_job(job.options)
+
     try:
+        # ------------------------------------------------------------------
+        # Phase 1: HEAD request to discover filename / content-length
+        # ------------------------------------------------------------------
+        initial_req = build_request(row, job.options, method_override=method_override)
         if job.host_throttle is not None:
-            job.host_throttle.wait(req.full_url)
-        with request.urlopen(req, timeout=job.options["timeout_seconds"]) as response:
-            final_url = response.geturl()
-            content_length = parse_content_length(response.headers)
-            expected_bytes = row.expected_bytes or content_length
-            filename = choose_filename(row, final_url, response.headers)
-            subdir_name = (
-                sanitize_segment(row.subdir_hint, "downloads")
-                if job.options["use_subdirectories"] and row.subdir_hint
-                else ""
+            job.host_throttle.wait(initial_req.full_url)
+
+        with opener.open(initial_req, timeout=job.options["timeout_seconds"]) as probe:
+            final_url = probe.geturl()
+            probe_content_length = parse_content_length(probe.headers)
+            expected_bytes = row.expected_bytes or probe_content_length
+            filename = choose_filename(row, final_url, probe.headers)
+
+        # ------------------------------------------------------------------
+        # Phase 2: Resolve target path
+        # ------------------------------------------------------------------
+        if job.options["use_subdirectories"] and row.subdir_hint:
+            safe_subdir = validate_subdir_path(row.subdir_hint)
+            subdir_name = sanitize_segment(safe_subdir, "") if safe_subdir else ""
+        else:
+            subdir_name = ""
+        target_dir = job.output_dir / subdir_name if subdir_name else job.output_dir
+        if job.output_dir not in target_dir.resolve().parents and target_dir.resolve() != job.output_dir.resolve():
+            _log.warning("Subdir %r resolves outside output dir; ignoring.", row.subdir_hint)
+            target_dir = job.output_dir
+
+        target_path, reservation_error = reserve_destination(
+            job, target_dir, filename, job.options["collision_strategy"],
+        )
+        if reservation_error:
+            update_row(
+                job, row,
+                status="skipped", message=reservation_error,
+                final_url=final_url, expected_bytes=expected_bytes, finished_at=time.time(),
             )
-            target_dir = job.output_dir / subdir_name if subdir_name else job.output_dir
-            target_path, reservation_error = reserve_destination(
-                job,
-                target_dir,
-                filename,
-                job.options["collision_strategy"],
-            )
-            if reservation_error:
+            add_job_log(job, f"Row {row.row_number}: skipped {filename} ({reservation_error.lower()}).")
+            return
+
+        assert target_path is not None
+        temp_path = target_path.with_name(f"{target_path.name}.part")
+
+        # ------------------------------------------------------------------
+        # Phase 3: Content-hash deduplication (skip if already downloaded)
+        # ------------------------------------------------------------------
+        if job.options.get("dedup_by_hash") and target_path.exists() and probe_content_length:
+            if target_path.stat().st_size == probe_content_length:
                 update_row(
-                    job,
-                    row,
+                    job, row,
                     status="skipped",
-                    message=reservation_error,
-                    final_url=final_url,
-                    expected_bytes=expected_bytes,
-                    finished_at=time.time(),
+                    message="Skipped: identical file already exists (hash match)",
+                    final_url=final_url, expected_bytes=expected_bytes, finished_at=time.time(),
                 )
-                add_job_log(job, f"Row {row.row_number}: skipped {filename} ({reservation_error.lower()}).")
+                add_job_log(job, f"Row {row.row_number}: skipped {filename} (size dedup).")
+                release_destination(job, target_path)
                 return
 
-            assert target_path is not None
-            temp_path = target_path.with_name(f"{target_path.name}.part")
-            if temp_path.exists():
-                temp_path.unlink()
+        # ------------------------------------------------------------------
+        # Phase 4: Dry-run short-circuit
+        # ------------------------------------------------------------------
+        if job.options.get("dry_run"):
+            update_row(
+                job, row,
+                status="completed", message=f"[dry-run] Would download {filename}",
+                final_url=final_url, expected_bytes=expected_bytes,
+                output_path=str(target_path), finished_at=time.time(),
+            )
+            add_job_log(job, f"Row {row.row_number}: [dry-run] {target_path.name}.")
+            release_destination(job, target_path)
+            return
 
-            update_row(job, row, final_url=final_url, expected_bytes=expected_bytes, message=f"Downloading {filename}")
-            bytes_downloaded = 0
-            with open(temp_path, "wb") as handle:
+        # ------------------------------------------------------------------
+        # Phase 5: Resume support — check for a .part file
+        # ------------------------------------------------------------------
+        resume_offset = 0
+        if job.options.get("resume", True) and temp_path.exists():
+            resume_offset = temp_path.stat().st_size
+            if resume_offset > 0:
+                _log.debug("Row %d: resuming from byte %d", row.row_number, resume_offset)
+
+        # ------------------------------------------------------------------
+        # Phase 6: Actual download request (with optional Range header)
+        # ------------------------------------------------------------------
+        extra: dict[str, str] = {}
+        if resume_offset > 0:
+            extra["Range"] = f"bytes={resume_offset}-"
+
+        dl_req = build_request(row, job.options, method_override=method_override, extra_headers=extra or None)
+        if job.host_throttle is not None:
+            job.host_throttle.wait(dl_req.full_url)
+
+        with opener.open(dl_req, timeout=job.options["timeout_seconds"]) as response:
+            final_url = response.geturl()
+            status_code = getattr(response, "status", None)
+            content_length_resp = parse_content_length(response.headers)
+            is_partial = status_code == 206  # HTTP 206 Partial Content
+
+            if is_partial:
+                write_mode = "ab"
+                bytes_already = resume_offset
+            else:
+                if temp_path.exists():
+                    temp_path.unlink()
+                write_mode = "wb"
+                bytes_already = 0
+
+            expected_bytes = row.expected_bytes or (
+                (content_length_resp + bytes_already) if content_length_resp else None
+            )
+            filename = choose_filename(row, final_url, response.headers)
+            update_row(
+                job, row,
+                final_url=final_url, expected_bytes=expected_bytes,
+                message=f"Downloading {filename}" + (" (resuming)" if is_partial else ""),
+            )
+
+            bytes_downloaded = bytes_already
+            last_speed_t = time.monotonic()
+            bytes_at_last_speed = bytes_already
+
+            with open(temp_path, write_mode) as handle:
                 while True:
                     if job.cancel_requested:
                         raise DownloadCancelled()
@@ -2103,36 +2359,78 @@ def transfer_download(job: DownloadJob, row: RowTask, method_override: str | Non
                         break
                     handle.write(chunk)
                     bytes_downloaded += len(chunk)
-                    update_row(job, row, bytes_downloaded=bytes_downloaded)
 
-            if content_length is not None and bytes_downloaded != content_length:
-                raise DownloadRetryableError(
-                    f"Incomplete download body: received {bytes_downloaded} of {content_length} bytes"
-                )
-            if bytes_downloaded == 0 and (content_length or row.expected_bytes):
+                    # Speed / ETA update every ~1 second
+                    now = time.monotonic()
+                    if now - last_speed_t >= 1.0:
+                        speed = (bytes_downloaded - bytes_at_last_speed) / (now - last_speed_t)
+                        eta_sec: float | None = None
+                        if expected_bytes and speed > 0 and expected_bytes > bytes_downloaded:
+                            eta_sec = (expected_bytes - bytes_downloaded) / speed
+                        msg = f"Downloading {filename} • {_format_speed(speed)}"
+                        if eta_sec is not None:
+                            msg += f" • ETA {_format_eta(eta_sec)}"
+                        update_row(job, row, bytes_downloaded=bytes_downloaded, message=msg)
+                        last_speed_t = now
+                        bytes_at_last_speed = bytes_downloaded
+                    else:
+                        update_row(job, row, bytes_downloaded=bytes_downloaded)
+
+            # Validate completeness
+            if not is_partial and content_length_resp is not None:
+                net_bytes = bytes_downloaded - bytes_already
+                if net_bytes != content_length_resp:
+                    raise DownloadRetryableError(
+                        f"Incomplete download body: received {net_bytes} of {content_length_resp} bytes"
+                    )
+            if bytes_downloaded == bytes_already and (content_length_resp or row.expected_bytes):
                 raise DownloadRetryableError("Received an empty download body")
 
             temp_path.replace(target_path)
             update_row(
-                job,
-                row,
-                status="completed",
-                message="Download complete",
-                output_path=str(target_path),
-                bytes_downloaded=bytes_downloaded,
-                finished_at=time.time(),
+                job, row,
+                status="completed", message="Download complete",
+                output_path=str(target_path), bytes_downloaded=bytes_downloaded, finished_at=time.time(),
             )
             add_job_log(job, f"Row {row.row_number}: saved {target_path.name}.")
     except DownloadRetryableError:
-        if temp_path and temp_path.exists():
+        # Keep .part file intact when resume is enabled
+        if temp_path and temp_path.exists() and not job.options.get("resume", True):
             temp_path.unlink()
         raise
     except DownloadCancelled:
-        if temp_path and temp_path.exists():
-            temp_path.unlink()
+        # Intentionally keep .part so resume can continue next time
         raise
     finally:
         release_destination(job, target_path)
+
+
+def _format_speed(bps: float) -> str:
+    if bps < 0:
+        return "? B/s"
+    for unit in ("B/s", "KB/s", "MB/s", "GB/s"):
+        if bps < 1024 or unit == "GB/s":
+            return f"{bps:.1f} {unit}"
+        bps /= 1024
+    return f"{bps:.1f} B/s"
+
+
+def _format_eta(seconds: float | None) -> str:
+    if seconds is None:
+        return ""
+    secs = int(seconds)
+    if secs <= 0:
+        return "0s"
+    parts = []
+    if secs >= 3600:
+        parts.append(f"{secs // 3600}h")
+        secs %= 3600
+    if secs >= 60:
+        parts.append(f"{secs // 60}m")
+        secs %= 60
+    if secs > 0 or not parts:
+        parts.append(f"{secs}s")
+    return " ".join(parts)
 
 
 def download_row(job: DownloadJob, row: RowTask) -> None:
@@ -2378,9 +2676,11 @@ def run_job(job: DownloadJob) -> None:
         job.finished_at = time.time()
 
     add_job_log(job, f"Job finished with status {job.status}.")
+    _log.info("Job %s finished with status %s.", job.job_id, job.status)
     write_manifest(job)
     if STATE is not None:
         STATE.persist_job(job)
+    _notify_job_complete(job)
 
 
 def run_media_job(job: DownloadJob) -> None:
@@ -2405,9 +2705,40 @@ def run_media_job(job: DownloadJob) -> None:
         job.finished_at = time.time()
 
     add_job_log(job, f"Media job finished with status {job.status}.")
+    _log.info("Media job %s finished with status %s.", job.job_id, job.status)
     write_manifest(job)
     if STATE is not None:
         STATE.persist_job(job)
+    _notify_job_complete(job)
+
+
+def _notify_job_complete(job: DownloadJob) -> None:
+    """Send a webhook notification if configured."""
+    cfg = load_config()
+    notif = cfg.get("notifications", {})
+    webhook_url = notif.get("webhook_url") or ""
+    if not webhook_url:
+        return
+    is_error = job.status in {"failed", "completed_with_errors", "cancelled"}
+    if is_error and not notif.get("webhook_on_error", True):
+        return
+    if not is_error and not notif.get("webhook_on_complete", True):
+        return
+    payload = {
+        "event": "job_complete",
+        "job_id": job.job_id,
+        "job_kind": job.job_kind,
+        "status": job.status,
+        "file_name": job.file_name,
+        "output_dir": str(job.output_dir),
+        "finished_at": timestamp_to_iso(job.finished_at),
+        "rows_total": len(job.rows),
+        "rows_completed": sum(1 for r in job.rows if r.status == "completed"),
+        "rows_failed": sum(1 for r in job.rows if r.status == "failed"),
+        "rows_skipped": sum(1 for r in job.rows if r.status == "skipped"),
+    }
+    timeout = float(notif.get("webhook_timeout", 10))
+    send_webhook_notification(webhook_url, payload, timeout=timeout)
 
 
 class DownloadClientHandler(BaseHTTPRequestHandler):
@@ -2604,6 +2935,8 @@ class DownloadClientHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, "A URL column is required to start downloads.")
             return
 
+        cfg = load_config()
+        dl_cfg = cfg.get("downloads", {})
         raw_output_dir = str(options.get("output_dir") or self.require_state().default_output_dir)
         output_dir = Path(raw_output_dir).expanduser().resolve()
         concurrency = max(1, min(int(options.get("concurrency") or DEFAULT_WORKERS), 16))
@@ -2620,8 +2953,17 @@ class DownloadClientHandler(BaseHTTPRequestHandler):
                 "collision_strategy": collision_strategy,
                 "use_subdirectories": bool(options.get("use_subdirectories", True)),
                 "timeout_seconds": max(5, min(int(options.get("timeout_seconds") or self.require_state().timeout_seconds), 600)),
-                "retry_attempts": DEFAULT_DOWNLOAD_RETRIES,
-                "request_spacing_seconds": DEFAULT_REQUEST_SPACING_SECONDS,
+                "retry_attempts": int(options.get("retry_attempts") or dl_cfg.get("retry_attempts", DEFAULT_DOWNLOAD_RETRIES)),
+                "request_spacing_seconds": float(options.get("request_spacing_seconds") or dl_cfg.get("request_spacing_seconds", DEFAULT_REQUEST_SPACING_SECONDS)),
+                # New options — honouring config.toml defaults when not overridden by UI
+                "resume": bool(options.get("resume", dl_cfg.get("resume", True))),
+                "dry_run": bool(options.get("dry_run", False)),
+                "dedup_by_hash": bool(options.get("dedup_by_hash", dl_cfg.get("dedup_by_hash", False))),
+                "verify_ssl": bool(options.get("verify_ssl", dl_cfg.get("verify_ssl", True))),
+                "proxy": str(options.get("proxy") or dl_cfg.get("proxy") or ""),
+                "basic_auth": str(options.get("basic_auth") or dl_cfg.get("basic_auth") or ""),
+                "cookies_file": str(options.get("cookies_file") or dl_cfg.get("cookies_file") or ""),
+                "custom_headers": dict(options.get("custom_headers") or dl_cfg.get("custom_headers") or {}),
             },
             mappings=merged_mappings,
             headers=headers,
@@ -2938,34 +3280,65 @@ class DownloadClientHandler(BaseHTTPRequestHandler):
 
 
 def parse_args() -> argparse.Namespace:
+    cfg = load_config()
+    ui_cfg = cfg.get("ui", {})
+    dl_cfg = cfg.get("downloads", {})
+    log_cfg = cfg.get("logging", {})
+
     parser = argparse.ArgumentParser(description="Run the DownloadScapper web app locally.")
-    parser.add_argument("--host", default=DEFAULT_HOST, help=f"Bind host. Default: {DEFAULT_HOST}")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Bind port. Default: {DEFAULT_PORT}")
+    parser.add_argument(
+        "--host",
+        default=ui_cfg.get("host", DEFAULT_HOST),
+        help=f"Bind host. Default: {DEFAULT_HOST}",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=ui_cfg.get("port", DEFAULT_PORT),
+        help=f"Bind port. Default: {DEFAULT_PORT}",
+    )
     parser.add_argument(
         "--output-dir",
-        default=str(DEFAULT_OUTPUT_DIR),
+        default=str(dl_cfg.get("output_dir") or DEFAULT_OUTPUT_DIR),
         help=f"Default destination directory. Default: {DEFAULT_OUTPUT_DIR}",
     )
     parser.add_argument(
         "--scrape-save-dir",
-        default=str(DEFAULT_SCRAPE_SAVE_DIR),
-        help=f"Directory where discovered scrape CSV/JSON files are archived. Default: {DEFAULT_SCRAPE_SAVE_DIR}",
+        default=str(_DEFAULT_SCRAPE_SAVE_DIR),
+        help=f"Directory where discovered scrape CSV/JSON files are archived. Default: {_DEFAULT_SCRAPE_SAVE_DIR}",
     )
     parser.add_argument(
         "--state-dir",
-        default=str(DEFAULT_STATE_DIR),
-        help=f"Directory where app job/discovery state is persisted. Default: {DEFAULT_STATE_DIR}",
+        default=str(_DEFAULT_STATE_DIR),
+        help=f"Directory where app job/discovery state is persisted. Default: {_DEFAULT_STATE_DIR}",
     )
     parser.add_argument(
         "--timeout-seconds",
         type=int,
-        default=DEFAULT_TIMEOUT,
+        default=int(dl_cfg.get("timeout_seconds", DEFAULT_TIMEOUT)),
         help=f"Per-download timeout in seconds. Default: {DEFAULT_TIMEOUT}",
     )
     parser.add_argument(
         "--no-browser",
         action="store_true",
+        default=bool(ui_cfg.get("no_browser", False)),
         help="Start the server without opening a browser tab.",
+    )
+    parser.add_argument(
+        "--log-level",
+        default=str(log_cfg.get("level", "INFO")),
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity. Default: INFO",
+    )
+    parser.add_argument(
+        "--log-file",
+        default=str(log_cfg.get("file") or ""),
+        help="If set, also write structured logs to this file.",
+    )
+    parser.add_argument(
+        "--generate-config",
+        action="store_true",
+        help="Write an example config.toml to the project directory and exit.",
     )
     return parser.parse_args()
 
@@ -2974,6 +3347,26 @@ def main() -> None:
     global STATE
 
     args = parse_args()
+
+    # ------------------------------------------------------------------
+    # Generate example config if requested
+    # ------------------------------------------------------------------
+    if getattr(args, "generate_config", False):
+        from config import write_example_config
+        from project_paths import default_project_dir
+        dest = default_project_dir() / "config.toml"
+        write_example_config(dest)
+        print(f"Example config written to: {dest}")
+        return
+
+    # ------------------------------------------------------------------
+    # Set up logging
+    # ------------------------------------------------------------------
+    log_file: Path | None = None
+    if args.log_file:
+        log_file = Path(args.log_file).expanduser().resolve()
+    setup_logging(level=level_from_string(args.log_level), log_file=log_file)
+
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     scrape_save_dir = Path(args.scrape_save_dir).expanduser().resolve()
@@ -2990,21 +3383,24 @@ def main() -> None:
 
     server = ThreadingHTTPServer((args.host, args.port), DownloadClientHandler)
     app_url = f"http://{args.host}:{args.port}"
+    _log.info("%s running at %s", APP_NAME, app_url)
+    _log.info("Default output directory: %s", output_dir)
+    _log.info("Scrape archive directory: %s", scrape_save_dir)
+    _log.info("State directory: %s", state_dir)
+    # Also print to stdout so the URL is always visible
     print(f"{APP_NAME} running at {app_url}")
-    print(f"Default output directory: {output_dir}")
-    print(f"Scrape archive directory: {scrape_save_dir}")
-    print(f"State directory: {state_dir}")
+    print(f"Press Ctrl+C to stop.")
     if not args.no_browser:
         try:
             webbrowser.open(app_url)
-            print("Opened browser automatically.")
+            _log.debug("Opened browser automatically.")
         except Exception:
-            print("Browser auto-open failed. Open the URL manually.")
-    print("Press Ctrl+C to stop.")
+            _log.warning("Browser auto-open failed. Open the URL manually.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down.")
+        _log.info("Shutting down.")
     finally:
         server.server_close()
 
